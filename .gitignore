@@ -1,3 +1,11 @@
-src/__pycache__/data_loader.cpython-314.pyc
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Omgevingsvariabelen & virtuele omgeving
 .env
+.venv/
+
+# Gegeneerde data & data mappen
 data/
+output.csv

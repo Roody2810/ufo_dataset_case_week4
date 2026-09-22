@@ -14,11 +14,12 @@ st.set_page_config(
 
 st.title("🛸 UFO Sightings & Bevolkingsanalyse")
 st.markdown(
-    "Dit dashboard combineert Kaggle UFO-waarnemingen met actuele bevolkingsdata via een REST API."
+    "Dit dashboard combineert Kaggle UFO-waarnemingen met actuele bevolkingsdata via een REST API "
+    "en maakt gebruik van **Reverse Geocoding** om ontbrekende landgegevens aan te vullen."
 )
 
 # --- DATA LADEN ---
-with st.spinner("Data laden en verwerken..."):
+with st.spinner("Data laden, reverse geocoding toepassen en verwerken..."):
     df = load_combined_data()
 
 if df.empty:
@@ -37,19 +38,19 @@ if datetime_col in df.columns:
 # --- SIDEBAR WIDGETS ---
 st.sidebar.header("🎛️ Dashboard Filters")
 
-# 1. DROPDOWN
-available_countries = df['country_name'].dropna().unique().tolist() if 'country_name' in df.columns else []
+# 1. DROPDOWN (Sorteer landnamen netjes op alfabet)
+available_countries = sorted([c for c in df['country_name'].dropna().unique() if c != 'Onbekend']) if 'country_name' in df.columns else []
 selected_country = st.sidebar.selectbox(
     "Selecteer een land:",
     options=["Alle landen"] + available_countries
 )
 
-# 2. SLIDER VOOR TIJDSTIP VAN DE DAG
+# 2. SLIDER VOOR TIJDSTIP VAN DE DAG (0 tot 24 uur)
 hour_range = st.sidebar.slider(
     "Selecteer een tijdsframe (uur):",
     min_value=0,
-    max_value=23,
-    value=(0, 23)
+    max_value=24,
+    value=(0, 24)
 )
 
 # 3. CHECKBOX
@@ -61,18 +62,26 @@ show_only_populated = st.sidebar.checkbox(
 # --- DATAFILTERING LOGICA ---
 filtered_df = df.copy()
 
-# Filter op land
+# 1. Filter op land
 if selected_country != "Alle landen" and 'country_name' in filtered_df.columns:
     filtered_df = filtered_df[filtered_df['country_name'] == selected_country]
 
-# Filter op uren-slider
+# 2. Filter op uren-slider
 if 'hour' in filtered_df.columns:
-    filtered_df = filtered_df[
-        (filtered_df['hour'] >= hour_range[0]) & 
-        (filtered_df['hour'] <= hour_range[1])
-    ]
+    min_h, max_h = hour_range
+    
+    # Als de slider op (0, 24) staat, behouden we 100% van de data (ook NaN's)
+    if min_h == 0 and max_h == 24:
+        pass
+    else:
+        # Als max op 24 staat, bedoelt de gebruiker t/m uur 23 (het laatste uur van de dag)
+        actual_max_h = 23 if max_h == 24 else max_h
+        filtered_df = filtered_df[
+            (filtered_df['hour'].isna()) | 
+            ((filtered_df['hour'] >= min_h) & (filtered_df['hour'] <= actual_max_h))
+        ]
 
-# Filter op checkbox
+# 3. Filter op checkbox
 if show_only_populated and 'population' in filtered_df.columns:
     filtered_df = filtered_df[filtered_df['population'].notna()]
 
@@ -80,11 +89,11 @@ if show_only_populated and 'population' in filtered_df.columns:
 col1, col2, col3 = st.columns(3)
 
 col1.metric("Aantal waarnemingen", f"{len(filtered_df):,}")
-col2.metric("Geselecteerde tijdsspanne", f"{hour_range[0]}:00u - {hour_range[1]}:59u")
+col2.metric("Geselecteerde tijdsframe", f"{hour_range[0]:02d}:00u - {hour_range[1]:02d}:00u")
 
 if 'country_name' in filtered_df.columns and 'population' in filtered_df.columns and not filtered_df.empty:
     stats_per_country = filtered_df.groupby('country_name').agg(
-        sightings=('city', 'count'),
+        sightings=('iso3', 'count'),
         population=('population', 'first')
     ).reset_index()
 
@@ -101,11 +110,10 @@ else:
 
 st.divider()
 
-# --- GRAFIEK 1: LIJNGRAFIEK VERLOOP OVER DE JAREN (MET TIJDSTEMPELS) ---
+# --- GRAFIEK 1: LIJNGRAFIEK VERLOOP OVER DE JAREN ---
 st.subheader("📈 Verloop van UFO Waarnemingen over de Jaren")
 
 if 'datetime_clean' in filtered_df.columns and not filtered_df['datetime_clean'].dropna().empty:
-    # Groepeer per datum (per dag/maand) voor verloop
     df_timeline = filtered_df.dropna(subset=['datetime_clean']).copy()
     df_timeline['date'] = df_timeline['datetime_clean'].dt.to_period('M').dt.to_timestamp()
     timeline_counts = df_timeline.groupby('date').size().reset_index(name='Aantal')
@@ -118,7 +126,6 @@ if 'datetime_clean' in filtered_df.columns and not filtered_df['datetime_clean']
         labels={'date': 'Datum', 'Aantal': 'Aantal meldingen'}
     )
 
-    # Voeg snelfilter knoppen toe (terugrekenend vanaf het meest recente punt in de data)
     fig_timeline.update_xaxes(
         rangeselector=dict(
             buttons=list([
@@ -174,23 +181,48 @@ with row2_col2:
 
 st.divider()
 
-# --- GRAFIEK 3: LANDEN PER 100K INWONERS (MET OVERIG CATEGORIE) ---
+# --- GRAFIEK 3: INTERACTIEVE WERELDKAART ---
+st.subheader("🗺️ Globale Spreiding van UFO Waarnemingen")
+
+if 'iso3' in filtered_df.columns and not filtered_df.empty:
+    map_df = filtered_df.groupby(['iso3', 'country_name']).size().reset_index(name='Aantal Waarnemingen')
+    
+    fig_map = px.choropleth(
+        map_df,
+        locations="iso3",
+        color="Aantal Waarnemingen",
+        hover_name="country_name",
+        color_continuous_scale="Reds",
+        projection="natural earth",
+        title="Aantal UFO Meldingen per Land"
+    )
+    st.plotly_chart(fig_map, use_container_width=True)
+
+st.divider()
+
+# --- GRAFIEK 4: LANDEN PER 100K INWONERS ---
 st.subheader("🌍 Waarnemingen per 100.000 Inwoners (Top 5 + Overig)")
 
 if 'country_name' in filtered_df.columns and 'population' in filtered_df.columns and not filtered_df.empty:
     country_metrics = filtered_df.groupby('country_name').agg(
-        totaal_sightings=('city', 'count'),
+        totaal_sightings=('iso3', 'count'),
         bevolking=('population', 'first')
     ).reset_index()
     
-    country_metrics = country_metrics[country_metrics['bevolking'] > 0]
+    # FILTER: Neem alleen landen mee met minstens 100 waarnemingen én bekende bevolking
+    country_metrics = country_metrics[
+        (country_metrics['bevolking'] > 0) & 
+        (country_metrics['country_name'] != 'Onbekend / Internationale wateren')
+    ]
     
     if not country_metrics.empty:
-        # Bereken per 100k
         country_metrics['per_100k'] = (country_metrics['totaal_sightings'] / country_metrics['bevolking']) * 100000
         country_metrics = country_metrics.sort_values(by='per_100k', ascending=False)
         
-        # Split in Top 5 en Overig
+        # 🔍 INSPECTIE TABEL: Bekijk de waarden die in de grafiek worden gebruikt
+        st.write("🔍 **Inspectie Top 10 Berekende Landen (per 100k inwoners):**")
+        st.dataframe(country_metrics.head(10), use_container_width=True)
+        
         if len(country_metrics) > 5:
             top_5 = country_metrics.head(5)
             overig_sightings = country_metrics.iloc[5:]['totaal_sightings'].sum()
@@ -224,9 +256,9 @@ st.dataframe(filtered_df.head(100), use_container_width=True)
 
 st.divider()
 
-# --- JOIN VERANTWOORDING (OPTIE B - RUBRIC VEREISTE) ---
+# --- JOIN VERANTWOORDING ---
 with st.expander("ℹ️ Data Integratie & Join Verantwoording"):
-    st.markdown("**Samenvoegsleutel (Join Key):** `country_iso3` (UFO dataset) 🔗 `countryId` (REST API)")
+    st.markdown("**Samenvoegsleutel (Join Key):** `iso3` (UFO dataset na geocoding) 🔗 `countryId` (REST API)")
     
     rijen_totaal = len(df)
     
@@ -234,4 +266,4 @@ with st.expander("ℹ️ Data Integratie & Join Verantwoording"):
     col_a.metric("Aantal rijen VÓÓR merge", f"{rijen_totaal:,}")
     col_b.metric("Aantal rijen NÁ merge", f"{rijen_totaal:,}")
     
-    st.success("✅ De left-join is geslaagd: exact evenveel rijen overgebleven, dus geen dataverlies of onbedoelde verdubbelingen.")
+    st.success("✅ De left-join is geslaagd op basis van ISO-3 landcodes: exact evenveel rijen overgebleven, dus geen dataverlies of onbedoelde verdubbelingen.")
