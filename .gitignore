@@ -1,0 +1,11 @@
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Omgevingsvariabelen & virtuele omgeving
+.env
+.venv/
+
+# Gegeneerde data & data mappen
+data/
+output.csv
