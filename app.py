@@ -563,3 +563,67 @@ st.metric(
     "Pearson correlatie",
     f"{correlation:.2f}"
 )
+
+# ------------------------------------------------------------
+# 10. Dropdown
+# ------------------------------------------------------------
+
+# Dropdown: kies UFO-vorm
+shapes = sorted(df["UFO_shape"].dropna().unique())
+
+selected_shape = st.selectbox(
+    "Kies een UFO-vorm",
+    shapes
+)
+
+# Slider: maximale waarnemingsduur
+max_duration = st.slider(
+    "Maximale waarnemingsduur (seconden)",
+    min_value=1,
+    max_value=10000,
+    value=1000
+)
+
+# Data filteren
+filtered_df = df[
+    (df["UFO_shape"] == selected_shape) &
+    (pd.to_numeric(df["length_of_encounter_seconds"], errors="coerce") <= max_duration)
+]
+
+st.write(filtered_df)
+
+# Jaar uit datum halen
+filtered_df["Year"] = pd.to_datetime(
+    filtered_df["Date_time"],
+    errors="coerce"
+).dt.year
+
+# Aantal waarnemingen per jaar
+year_counts = (
+    filtered_df["Year"]
+    .value_counts()
+    .sort_index()
+    .reset_index()
+)
+
+year_counts.columns = ["Year", "UFO_count"]
+
+# Grafiek
+fig = px.line(
+    year_counts,
+    x="Year",
+    y="UFO_count",
+    markers=True,
+    title=f"UFO-waarnemingen van vorm: {selected_shape}"
+)
+
+fig.update_layout(
+    xaxis_title="Jaar",
+    yaxis_title="Aantal waarnemingen"
+)
+
+st.plotly_chart(fig, width="stretch")
+
+show_trend = st.checkbox(
+    "Toon trendlijn"
+)
