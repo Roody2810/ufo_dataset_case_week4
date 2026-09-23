@@ -1,1 +1,12 @@
-src/__pycache__/data_loader.cpython-314.pyc
+# Ignore local data files
+/data/
+
+# Ignore environment secrets
+.env
+.env.*
+
+# Ignore editor config
+.idea/
+
+# Existing project ignore
+src/__pycache__/
