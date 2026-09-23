@@ -1,8 +1,10 @@
+# Vergeet niet "pip install -r requirements.txt" uit te voeren in je terminal, anders werkt het niet
+
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from src.data_loader import load_combined_data
+from src.data_loader import load_combined_data, kaggleDataLoader
 
 st.set_page_config(
     page_title="UFO Spotter Dashboard & Bevolkingsanalyse",
@@ -371,3 +373,193 @@ with st.expander("Data Integratie & Join Verantwoording"):
     col_b.metric("Aantal rijen ná merge", f"{rijen_totaal:,}")
 
     st.success("De left-join is geslaagd op basis van ISO-3 landcodes. Er is geen dataverlies of onbedoelde verdubbeling opgetreden.")
+# ============================================================
+# MARIHUANAGEBRUIK VS UFO-MELDINGEN
+# ============================================================
+
+st.divider()
+
+st.header("Marihuanagebruik vs. UFO-meldingen")
+
+
+# ------------------------------------------------------------
+# 1. Drugs dataset laden
+# ------------------------------------------------------------
+
+drug_loader = kaggleDataLoader(
+    "mexwell/us-drug-abuse",
+    download_dir="../data"
+)
+
+drugs = drug_loader.load_csv("drugs.csv")
+
+
+# ------------------------------------------------------------
+# 2. UFO's per staat tellen
+# ------------------------------------------------------------
+
+ufo_per_state = (
+    df["state/province"]
+    .dropna()
+    .astype(str)
+    .str.strip()
+    .str.upper()
+    .value_counts()
+    .reset_index()
+)
+
+ufo_per_state.columns = ["State_code", "UFO_count"]
+
+
+# ------------------------------------------------------------
+# 3. Staatnamen drugs -> Amerikaanse afkortingen
+# ------------------------------------------------------------
+
+state_codes = {
+    "alabama": "AL",
+    "alaska": "AK",
+    "arizona": "AZ",
+    "arkansas": "AR",
+    "california": "CA",
+    "colorado": "CO",
+    "connecticut": "CT",
+    "delaware": "DE",
+    "florida": "FL",
+    "georgia": "GA",
+    "hawaii": "HI",
+    "idaho": "ID",
+    "illinois": "IL",
+    "indiana": "IN",
+    "iowa": "IA",
+    "kansas": "KS",
+    "kentucky": "KY",
+    "louisiana": "LA",
+    "maine": "ME",
+    "maryland": "MD",
+    "massachusetts": "MA",
+    "michigan": "MI",
+    "minnesota": "MN",
+    "mississippi": "MS",
+    "missouri": "MO",
+    "montana": "MT",
+    "nebraska": "NE",
+    "nevada": "NV",
+    "new hampshire": "NH",
+    "new jersey": "NJ",
+    "new mexico": "NM",
+    "new york": "NY",
+    "north carolina": "NC",
+    "north dakota": "ND",
+    "ohio": "OH",
+    "oklahoma": "OK",
+    "oregon": "OR",
+    "pennsylvania": "PA",
+    "rhode island": "RI",
+    "south carolina": "SC",
+    "south dakota": "SD",
+    "tennessee": "TN",
+    "texas": "TX",
+    "utah": "UT",
+    "vermont": "VT",
+    "virginia": "VA",
+    "washington": "WA",
+    "west virginia": "WV",
+    "wisconsin": "WI",
+    "wyoming": "WY"
+}
+
+
+drugs["State_code"] = (
+    drugs["State"]
+    .astype(str)
+    .str.strip()
+    .str.lower()
+    .map(state_codes)
+)
+
+
+# ------------------------------------------------------------
+# 4. Marijuana 18-25
+# ------------------------------------------------------------
+
+drugs["Marijuana_18_25"] = pd.to_numeric(
+    drugs["Rates.Marijuana.Used Past Year.18-25"],
+    errors="coerce"
+)
+
+
+# ------------------------------------------------------------
+# 5. Data combineren
+# ------------------------------------------------------------
+
+data_scatter = pd.merge(
+    drugs,
+    ufo_per_state,
+    on="State_code",
+    how="inner"
+)
+
+
+# ------------------------------------------------------------
+# 6. Alleen benodigde kolommen
+# ------------------------------------------------------------
+
+data_scatter = data_scatter[
+    [
+        "State",
+        "State_code",
+        "Marijuana_18_25",
+        "UFO_count"
+    ]
+].dropna()
+
+
+# ------------------------------------------------------------
+# 7. Controleren
+# ------------------------------------------------------------
+
+st.write(
+    "Aantal gekoppelde staten:",
+    len(data_scatter)
+)
+
+st.dataframe(data_scatter)
+
+
+# ------------------------------------------------------------
+# 8. Scatterplot
+# ------------------------------------------------------------
+
+fig_scatter = px.scatter(
+    data_scatter,
+    x="Marijuana_18_25",
+    y="UFO_count",
+    hover_name="State",
+    trendline="ols",
+    labels={
+        "Marijuana_18_25": "Marihuanagebruik 18-25 (%)",
+        "UFO_count": "Aantal UFO-meldingen"
+    },
+    title="Marihuanagebruik vs. UFO-meldingen per staat"
+)
+
+st.plotly_chart(
+    fig_scatter,
+    use_container_width=True
+)
+
+
+# ------------------------------------------------------------
+# 9. Correlatie
+# ------------------------------------------------------------
+
+correlation = data_scatter[
+    "Marijuana_18_25"
+].corr(
+    data_scatter["UFO_count"]
+)
+
+st.metric(
+    "Pearson correlatie",
+    f"{correlation:.2f}"
+)
