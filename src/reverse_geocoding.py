@@ -22,8 +22,6 @@ def add_iso3_and_names(df):
             mapping[code] = {'iso3': 'GBR', 'country_name': 'United Kingdom'}
         elif clean in ['AU', 'AUS']:
             mapping[code] = {'iso3': 'AUS', 'country_name': 'Australia'}
-        elif clean in ['AD', 'AND']:
-            mapping[code] = {'iso3': 'AND', 'country_name': 'Andorra'}
         else:
             country = pycountry.countries.get(alpha_2=clean) or pycountry.countries.get(alpha_3=clean)
             if country:
