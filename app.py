@@ -565,7 +565,7 @@ st.metric(
 )
 
 # ------------------------------------------------------------
-# 10. Dropdown
+# 10. Dropdown + Slider + Checkbox
 # ------------------------------------------------------------
 
 # Dropdown: kies UFO-vorm
@@ -580,17 +580,39 @@ selected_shape = st.selectbox(
 max_duration = st.slider(
     "Maximale waarnemingsduur (seconden)",
     min_value=1,
-    max_value=10000,
+    max_value=2000,
     value=1000
+)
+
+# Checkbox: alleen extreme waarnemingen
+extreme_only = st.checkbox(
+    "Alleen waarnemingen van 10 minuten of langer"
 )
 
 # Data filteren
 filtered_df = df[
     (df["UFO_shape"] == selected_shape) &
-    (pd.to_numeric(df["length_of_encounter_seconds"], errors="coerce") <= max_duration)
+    (
+        pd.to_numeric(
+            df["length_of_encounter_seconds"],
+            errors="coerce"
+        ) <= max_duration
+    )
 ]
 
-st.write(filtered_df)
+# Extra filter wanneer checkbox aan staat
+if extreme_only:
+    filtered_df = filtered_df[
+        pd.to_numeric(
+            filtered_df["length_of_encounter_seconds"],
+            errors="coerce"
+        ) >= 600
+    ]
+
+# Aantal gevonden waarnemingen
+st.write(
+    f"Aantal waarnemingen: **{len(filtered_df)}**"
+)
 
 # Jaar uit datum halen
 filtered_df["Year"] = pd.to_datetime(
@@ -623,7 +645,3 @@ fig.update_layout(
 )
 
 st.plotly_chart(fig, width="stretch")
-
-show_trend = st.checkbox(
-    "Toon trendlijn"
-)
