@@ -1,12 +1,11 @@
-# Ignore local data files
-/data/
+# Python bytecode
+__pycache__/
+*.pyc
 
-# Ignore environment secrets
+# Omgevingsvariabelen & virtuele omgeving
 .env
-.env.*
+.venv/
 
-# Ignore editor config
-.idea/
-
-# Existing project ignore
-src/__pycache__/
+# Gegeneerde data & data mappen
+data/
+output.csv
