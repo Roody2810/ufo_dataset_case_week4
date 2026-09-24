@@ -3,17 +3,21 @@ import plotly.express as px
 import streamlit as st
 
 from src.data_loader import load_combined_data
+from src.constants import (
+    COLOR_ACCENT,
+    COLOR_CONTEXT,
+    INVALID_VALUES,
+    USA_NAMES,
+    STATE_MAP,
+    US_STATES
+)
 
+# Pagina configuratie
 st.set_page_config(
-    page_title="UFO Spotter Dashboard & Bevolkingsanalyse",
+    page_title="UFO Spotter Dashboard",
     page_icon="🛸",
     layout="wide"
 )
-
-# Visuals & constanten
-COLOR_ACCENT = "#00E676"
-COLOR_CONTEXT = "#94A3B8"
-INVALID_VALUES = {'onbekend', 'unknown', 'none', 'nan', 'null', '', 'other', 'n/a', 'undefined'}
 
 
 def get_clean_series(dataframe: pd.DataFrame, col_name: str | None) -> pd.Series:
@@ -32,23 +36,194 @@ def detect_column(dataframe: pd.DataFrame, candidates: list[str]) -> str | None:
     return None
 
 
+def plot_per_100k(dataframe: pd.DataFrame, group_col: str = 'country_name', top_n: int = 8):
+    """Genereert een staafdiagram voor waarnemingen per 100.000 inwoners."""
+    if group_col not in dataframe.columns or 'population' not in dataframe.columns:
+        st.info("Onvoldoende bevolkingsdata beschikbaar voor berekening per 100k inwoners.")
+        return
+
+    df_valid = dataframe.dropna(subset=[group_col, 'population']).copy()
+    if df_valid.empty:
+        st.info("Geen bevolkingsdata beschikbaar voor de huidige selectie.")
+        return
+
+    stats = df_valid.groupby(group_col).agg(
+        Aantal=(group_col, 'count'),
+        Bevolking=('population', 'max')
+    ).reset_index()
+
+    stats = stats[stats['Bevolking'] > 0]
+    if stats.empty:
+        st.info("Geen geldige bevolkingscijfers gevonden.")
+        return
+
+    stats['Per100k'] = (stats['Aantal'] / stats['Bevolking']) * 100000
+    stats = stats.sort_values(by='Per100k', ascending=False).head(top_n)
+
+    colors = [COLOR_ACCENT if i == 0 else COLOR_CONTEXT for i in range(len(stats))]
+
+    fig = px.bar(
+        stats,
+        x='Per100k',
+        y=group_col,
+        orientation='h',
+        text='Per100k'
+    )
+    max_val = stats['Per100k'].max()
+    fig.update_traces(
+        marker_color=colors,
+        texttemplate='%{text:.2f}',
+        textposition='outside',
+        cliponaxis=False
+    )
+    fig.update_layout(
+        yaxis=dict(autorange="reversed", title=group_col.replace('_', ' ').capitalize()),
+        xaxis=dict(range=[0, max_val * 1.25], title="Waarnemingen per 100.000 inwoners"),
+        margin=dict(l=20, r=40, t=30, b=20)
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def plot_hourly_distribution(dataframe: pd.DataFrame):
+    """Genereert de uurverdeling van het aantal waarnemingen."""
+    if 'hour' not in dataframe.columns or dataframe['hour'].dropna().empty:
+        st.info("Geen tijdstippen beschikbaar.")
+        return
+
+    hourly_counts = dataframe['hour'].value_counts().sort_index().reset_index()
+    hourly_counts.columns = ['Uur', 'Aantal']
+
+    full_hours = pd.DataFrame({'Uur': list(range(24))})
+    hourly_counts = pd.merge(full_hours, hourly_counts, on='Uur', how='left').fillna(0)
+    hourly_counts['Aantal'] = hourly_counts['Aantal'].astype(int)
+
+    hourly_counts['Tijdsblok'] = hourly_counts['Uur'].apply(lambda h: f"{int(h):02d}:00 - {int(h)+1:02d}:00")
+    hourly_counts['Uur_label'] = hourly_counts['Uur'].apply(lambda h: f"{int(h):02d}:00")
+
+    max_count = hourly_counts['Aantal'].max()
+    threshold = max_count * 0.80 if max_count > 0 else 0
+    
+    colors_hour = [
+        COLOR_ACCENT if val >= threshold and val > 0 else COLOR_CONTEXT 
+        for val in hourly_counts['Aantal']
+    ]
+
+    fig_hourly = px.bar(
+        hourly_counts,
+        x='Uur_label',
+        y='Aantal',
+        hover_data={'Uur_label': False, 'Tijdsblok': True, 'Aantal': ':,d'}
+    )
+    fig_hourly.update_traces(marker_color=colors_hour)
+    fig_hourly.update_layout(
+        xaxis_title="Startuur",
+        yaxis_title="Aantal meldingen",
+        margin=dict(l=20, r=20, t=30, b=20)
+    )
+    st.plotly_chart(fig_hourly, use_container_width=True)
+
+
+def plot_top_states(dataframe: pd.DataFrame, state_col: str | None, top_n: int = 10):
+    """Genereert een staafdiagram voor de meest voorkomende Amerikaanse staten."""
+    clean_s_series = get_clean_series(dataframe, state_col)
+    if clean_s_series.empty:
+        st.info("Geen staatgegevens beschikbaar in de huidige selectie.")
+        return
+
+    state_counts = clean_s_series.value_counts().head(top_n).reset_index()
+    state_counts.columns = ['Staat', 'Aantal']
+
+    colors_state = [COLOR_ACCENT if i == 0 else COLOR_CONTEXT for i in range(len(state_counts))]
+
+    fig_state = px.bar(state_counts, x='Staat', y='Aantal', text='Aantal')
+    max_st_val = state_counts['Aantal'].max()
+    fig_state.update_traces(marker_color=colors_state, textposition='outside', cliponaxis=False)
+    fig_state.update_layout(
+        yaxis=dict(range=[0, max_st_val * 1.18], title="Aantal meldingen"),
+        xaxis=dict(title="Amerikaanse Staat"),
+        margin=dict(l=20, r=20, t=30, b=20)
+    )
+    st.plotly_chart(fig_state, use_container_width=True)
+
+
+def plot_timeline(dataframe: pd.DataFrame, key_suffix: str = "default"):
+    """Genereert de tijdslijn van waarnemingen over de jaren heen."""
+    if 'datetime_clean' not in dataframe.columns or dataframe['datetime_clean'].dropna().empty:
+        st.info("Geen datumgegevens beschikbaar voor de tijdslijn.")
+        return
+
+    df_timeline = dataframe.dropna(subset=['datetime_clean']).copy()
+    total_records = len(df_timeline)
+
+    default_cumulative = total_records < 100
+
+    is_cumulative = st.checkbox(
+        "Toon cumulatief verloop", 
+        value=default_cumulative, 
+        key=f"cum_check_{key_suffix}"
+    )
+
+    if total_records < 20:
+        df_timeline['date'] = df_timeline['datetime_clean'].dt.year
+        x_title = "Jaar"
+    else:
+        df_timeline['date'] = df_timeline['datetime_clean'].dt.to_period('M').dt.to_timestamp()
+        x_title = "Datum"
+
+    timeline_counts = df_timeline.groupby('date').size().reset_index(name='Aantal')
+
+    if is_cumulative:
+        timeline_counts['Aantal'] = timeline_counts['Aantal'].cumsum()
+        y_title = "Cumulatief aantal meldingen"
+    else:
+        y_title = "Aantal meldingen"
+
+    fig_timeline = px.line(
+        timeline_counts,
+        x='date',
+        y='Aantal',
+        labels={'date': x_title, 'Aantal': y_title}
+    )
+    fig_timeline.update_traces(line_color=COLOR_ACCENT, line_width=2.5)
+    
+    max_y = timeline_counts['Aantal'].max()
+    fig_timeline.update_layout(
+        yaxis=dict(tick0=0, dtick=1 if max_y <= 10 else None, title=y_title),
+        margin=dict(l=20, r=20, t=30, b=20)
+    )
+
+    if total_records >= 20:
+        fig_timeline.update_xaxes(
+            rangeselector=dict(
+                buttons=[
+                    dict(count=5, label="5J", step="year", stepmode="backward"),
+                    dict(count=10, label="10J", step="year", stepmode="backward"),
+                    dict(count=25, label="25J", step="year", stepmode="backward"),
+                    dict(step="all", label="Alles")
+                ]
+            )
+        )
+        
+    st.plotly_chart(fig_timeline, use_container_width=True)
+
+
+# Core Dashboard Layout
 st.title("UFO Spotter Dashboard")
 st.markdown(
-    "**Waar en wanneer maak je de meeste kans om een UFO te spotten?** "
-    "Combineert wereldwijde waarnemingen met bevolkingsdata om patronen in locaties en tijdstippen te analyseren."
+    "Analyse van wereldwijde UFO-waarnemingen in combinatie met bevolkingsdata "
+    "om patronen in locaties, tijden en vormen te ontdekken."
 )
 
-# Data laden
 with st.spinner("Data laden..."):
     df = load_combined_data()
 
 if df.empty:
-    st.error("Het is niet gelukt om de dataset te laden.")
+    st.error("De dataset kon niet worden geladen.")
     st.stop()
 
 # Datetime verwerken
-datetime_col = 'Date_time' if 'Date_time' in df.columns else 'datetime'
-if datetime_col in df.columns:
+datetime_col = detect_column(df, ['date_time', 'datetime', 'date'])
+if datetime_col:
     df['datetime_clean'] = pd.to_datetime(
         df[datetime_col].astype(str).str.replace('24:00', '00:00'),
         errors='coerce'
@@ -56,41 +231,63 @@ if datetime_col in df.columns:
     df['hour'] = df['datetime_clean'].dt.hour
     df['year'] = df['datetime_clean'].dt.year
 
+# Kolommen detecteren en staatnamen vroegtijdig mappen
 state_col = detect_column(df, ['state', 'state/province', 'state_code', 'region', 'staat', 'province'])
-city_col = detect_column(df, ['city', 'stad', 'town', 'location'])
-shape_col = detect_column(df, ['shape', 'ufo_shape'])
+shape_col = detect_column(df, ['shape', 'ufo_shape', 'vorm'])
 
-# Sidebar
-st.sidebar.header("Dashboard Filters")
+if state_col:
+    df['state_full'] = df[state_col].astype(str).str.strip().str.upper().map(STATE_MAP).fillna(df[state_col])
+    state_col = 'state_full'
+
+# Sidebar Filters
+st.sidebar.header("Filters")
 
 available_countries = []
 if 'country_name' in df.columns:
     raw_countries = df['country_name'].dropna().unique()
-    available_countries = sorted([c for c in raw_countries if c.lower() not in INVALID_VALUES])
+    available_countries = sorted([c for c in raw_countries if str(c).lower() not in INVALID_VALUES])
 
 selected_country = st.sidebar.selectbox(
-    "Selecteer weergave:",
-    options=["Alle landen (Spotter Overview)"] + available_countries
+    "Selecteer land / weergave:",
+    options=["Wereldwijd overzicht"] + available_countries
 )
 
+selected_state = "Alle staten"
+is_usa_selected = selected_country.lower() in USA_NAMES
+
+if is_usa_selected and state_col:
+    usa_df = df[df['country_name'] == selected_country]
+    clean_states_series = get_clean_series(usa_df, state_col)
+    
+    us_allowed_names = {STATE_MAP[code] for code in US_STATES if code in STATE_MAP} | US_STATES
+    available_states = sorted([s for s in clean_states_series.unique() if s in us_allowed_names])
+    
+    selected_state = st.sidebar.selectbox(
+        "Selecteer Amerikaanse staat:",
+        options=["Alle staten"] + available_states
+    )
+
 hour_range = st.sidebar.slider(
-    "Selecteer tijdsframe (uur van de dag):",
+    "Selecteer uur van de dag:",
     min_value=0,
     max_value=24,
     value=(0, 24)
 )
 
 show_only_populated = st.sidebar.checkbox(
-    "Toon alleen locaties met bevolkingsdata",
+    "Toon alleen locaties met bekende bevolkingsdata",
     value=False
 )
 
-# Data filteren
+# Data filtering
 filtered_df = df.copy()
-is_overview_mode = (selected_country == "Alle landen (Spotter Overview)")
+is_overview_mode = (selected_country == "Wereldwijd overzicht")
 
 if not is_overview_mode and 'country_name' in filtered_df.columns:
     filtered_df = filtered_df[filtered_df['country_name'] == selected_country]
+
+if is_usa_selected and selected_state != "Alle staten" and state_col:
+    filtered_df = filtered_df[filtered_df[state_col] == selected_state]
 
 if 'hour' in filtered_df.columns:
     min_h, max_h = hour_range
@@ -106,12 +303,10 @@ if show_only_populated and 'population' in filtered_df.columns:
 
 st.divider()
 
-# Mode 1: Wereldwijd overzicht
+# Mode 1: Wereldwijd Overzicht
 if is_overview_mode:
-    st.header("UFO Spotter Quick Guide (Wereldwijd Overzicht)")
-    st.caption("Snel overzicht van de beste locaties en tijden op basis van historische data.")
+    st.header("Wereldwijd Overzicht")
 
-    # KPI's berekenen
     top_country, top_country_pct = "Onbekend", 0.0
     if 'country_name' in filtered_df.columns and not filtered_df.empty:
         clean_countries = get_clean_series(filtered_df, 'country_name')
@@ -128,36 +323,31 @@ if is_overview_mode:
     top_state_str = "Onbekend"
     clean_states = get_clean_series(filtered_df, state_col)
     if not clean_states.empty:
-        top_state_str = clean_states.value_counts().index[0].upper()
+        top_state_str = clean_states.value_counts().index[0]
 
-    top_shape_str = "Licht"
+    top_shape_str = "Onbekend"
     clean_shapes = get_clean_series(filtered_df, shape_col)
     if not clean_shapes.empty:
         top_shape_str = clean_shapes.value_counts().index[0].capitalize()
 
-    # KPI Weergave
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-    kpi1.metric("Hotspot Land", top_country, f"{top_country_pct:.1f}% van meldingen")
-    kpi2.metric("Beste Tijdstip", peak_hour_str, "Late avond / Nacht")
-    kpi3.metric("Top Regio / Staat", top_state_str, "Hoogste concentratie")
-    kpi4.metric("Meest Geziene Vorm", top_shape_str, "Meest gemelde type")
+    kpi1.metric("Meeste Meldingen", top_country, f"{top_country_pct:.1f}% van totaal")
+    kpi2.metric("Piek Tijdstip", peak_hour_str)
+    kpi3.metric("Top Staat/Regio", top_state_str)
+    kpi4.metric("Meest Gemelde Vorm", top_shape_str)
 
     st.divider()
 
-    # Landenvergelijking & US Staten
     row1_col1, row1_col2 = st.columns(2)
 
     with row1_col1:
-        st.subheader("Landenvergelijking")
+        st.subheader("Top Landen (Aantal meldingen)")
         clean_c_series = get_clean_series(filtered_df, 'country_name')
         if not clean_c_series.empty:
             country_counts = clean_c_series.value_counts().head(8).reset_index()
             country_counts.columns = ['Land', 'Aantal']
 
-            colors = [
-                COLOR_ACCENT if land in ['Verenigde Staten', 'USA', 'United States', 'US'] else COLOR_CONTEXT
-                for land in country_counts['Land']
-            ]
+            colors = [COLOR_ACCENT if i == 0 else COLOR_CONTEXT for i in range(len(country_counts))]
 
             fig_country = px.bar(country_counts, x='Aantal', y='Land', orientation='h', text='Aantal')
             max_val = country_counts['Aantal'].max()
@@ -170,61 +360,16 @@ if is_overview_mode:
             st.plotly_chart(fig_country, use_container_width=True)
 
     with row1_col2:
-        st.subheader("Hotspot Staten (VS)")
-        clean_s_series = get_clean_series(filtered_df, state_col)
-        if not clean_s_series.empty:
-            state_counts = clean_s_series.value_counts().head(10).reset_index()
-            state_counts.columns = ['Staat', 'Aantal']
-            state_counts['Staat'] = state_counts['Staat'].str.upper()
-
-            top_st = state_counts.iloc[0]['Staat']
-            colors_state = [COLOR_ACCENT if st_code == top_st else COLOR_CONTEXT for st_code in state_counts['Staat']]
-
-            fig_state = px.bar(state_counts, x='Staat', y='Aantal', text='Aantal')
-            max_st_val = state_counts['Aantal'].max()
-            fig_state.update_traces(marker_color=colors_state, textposition='outside', cliponaxis=False)
-            fig_state.update_layout(
-                yaxis=dict(range=[0, max_st_val * 1.18], title="Aantal meldingen"),
-                xaxis=dict(title="Amerikaanse Staat"),
-                margin=dict(l=20, r=20, t=30, b=20)
-            )
-            st.plotly_chart(fig_state, use_container_width=True)
-        else:
-            st.info("Geen specifieke staatgegevens beschikbaar in de huidige selectie.")
+        st.subheader("Waarnemingen per 100k Inwoners")
+        plot_per_100k(filtered_df, group_col='country_name', top_n=8)
 
     st.divider()
 
-    # Piekuren & Vormen
     row2_col1, row2_col2 = st.columns(2)
 
     with row2_col1:
-        st.subheader("Piekuren van Waarnemingen")
-        if 'hour' in filtered_df.columns and not filtered_df['hour'].dropna().empty:
-            hourly_counts = filtered_df['hour'].value_counts().sort_index().reset_index()
-            hourly_counts.columns = ['Uur', 'Aantal']
-
-            full_hours = pd.DataFrame({'Uur': list(range(24))})
-            hourly_counts = pd.merge(full_hours, hourly_counts, on='Uur', how='left').fillna(0)
-            hourly_counts['Aantal'] = hourly_counts['Aantal'].astype(int)
-
-            hourly_counts['Tijdsblok'] = hourly_counts['Uur'].apply(lambda h: f"{int(h):02d}:00 - {int(h)+1:02d}:00")
-            hourly_counts['Uur_label'] = hourly_counts['Uur'].apply(lambda h: f"{int(h):02d}:00")
-
-            colors_hour = [COLOR_ACCENT if 20 <= h <= 23 else COLOR_CONTEXT for h in hourly_counts['Uur']]
-
-            fig_hourly = px.bar(
-                hourly_counts,
-                x='Uur_label',
-                y='Aantal',
-                hover_data={'Uur_label': False, 'Tijdsblok': True, 'Aantal': ':,d'}
-            )
-            fig_hourly.update_traces(marker_color=colors_hour)
-            fig_hourly.update_layout(
-                xaxis_title="Tijdsblok",
-                yaxis_title="Aantal meldingen",
-                margin=dict(l=20, r=20, t=30, b=20)
-            )
-            st.plotly_chart(fig_hourly, use_container_width=True)
+        st.subheader("Top Staten (VS)")
+        plot_top_states(filtered_df, state_col)
 
     with row2_col2:
         st.subheader("Meest Voorkomende Vormen")
@@ -233,8 +378,9 @@ if is_overview_mode:
             shape_counts = clean_sh_series.value_counts().head(7).reset_index()
             shape_counts.columns = ['Vorm', 'Aantal']
 
-            fig_shape = px.bar(shape_counts, x='Aantal', y='Vorm', orientation='h', text='Aantal')
             colors_shape = [COLOR_ACCENT if i == 0 else COLOR_CONTEXT for i in range(len(shape_counts))]
+
+            fig_shape = px.bar(shape_counts, x='Aantal', y='Vorm', orientation='h', text='Aantal')
             max_sh_val = shape_counts['Aantal'].max()
             fig_shape.update_traces(marker_color=colors_shape, textposition='outside', cliponaxis=False)
             fig_shape.update_layout(
@@ -244,130 +390,91 @@ if is_overview_mode:
             )
             st.plotly_chart(fig_shape, use_container_width=True)
 
-# Mode 2: Specifiek land
-else:
-    st.header(f"Gedetailleerde Analyse: {selected_country}")
+    st.divider()
 
-    c_col1, c_col2, c_col3 = st.columns(3)
-    c_col1.metric("Aantal waarnemingen", f"{len(filtered_df):,}")
-    c_col2.metric("Geselecteerd tijdsframe", f"{hour_range[0]:02d}:00u - {hour_range[1]:02d}:00u")
-
-    if 'population' in filtered_df.columns and not filtered_df.empty:
-        pop = filtered_df['population'].iloc[0]
-        if pd.notna(pop) and pop > 0:
-            per_100k = (len(filtered_df) / pop) * 100000
-            c_col3.metric("Sightings per 100k inw.", f"{per_100k:.2f}")
-        else:
-            c_col3.metric("Sightings per 100k inw.", "N.v.t.")
+    st.subheader("Verdeling per Uur")
+    plot_hourly_distribution(filtered_df)
 
     st.divider()
 
+    st.subheader("Verloop van Waarnemingen over de Tijd")
+    plot_timeline(filtered_df, key_suffix="overview")
+
+# Mode 2: Specifiek Land
+else:
+    header_title = f"Overzicht: {selected_country}"
+    if is_usa_selected and selected_state != "Alle staten":
+        header_title += f" ({selected_state})"
+
+    st.header(header_title)
+
+    total_sightings = len(filtered_df)
+
+    per_100k_str = "N.v.t."
+    if 'population' in filtered_df.columns and not filtered_df['population'].dropna().empty:
+        pop = filtered_df['population'].iloc[0]
+        if pd.notna(pop) and pop > 0:
+            per_100k_val = (total_sightings / pop) * 100000
+            per_100k_str = f"{per_100k_val:.2f}"
+
+    top_shape = "Onbekend"
+    clean_sh = get_clean_series(filtered_df, shape_col)
+    if not clean_sh.empty:
+        top_shape = clean_sh.value_counts().index[0].capitalize()
+
+    # 1. KPI's
+    k1, k2, k3 = st.columns(3)
+    k1.metric("Aantal Waarnemingen", f"{total_sightings:,}")
+    k2.metric("Per 100k Inwoners", per_100k_str)
+    k3.metric("Meest Geziene Vorm", top_shape)
+
+    st.divider()
+
+    # 2. Sightings over de jaren (Tijdslijn)
+    st.subheader("Verloop over de Tijd")
+    plot_timeline(filtered_df, key_suffix="country")
+
+    # 3. Staten (alleen zichtbaar bij VS -> Alle staten)
+    if is_usa_selected and selected_state == "Alle staten":
+        st.divider()
+        st.subheader("Top Staten (VS)")
+        plot_top_states(filtered_df, state_col)
+
+    st.divider()
+
+    # 4a/4b. Vormen & Uurverdeling
     col_a, col_b = st.columns(2)
 
     with col_a:
-        st.subheader(f"Uurverdeling in {selected_country}")
-        if 'hour' in filtered_df.columns and not filtered_df['hour'].dropna().empty:
-            hourly_c = filtered_df['hour'].value_counts().sort_index().reset_index()
-            hourly_c.columns = ['Uur', 'Aantal']
+        st.subheader("Meest Geziene Vormen")
+        if not clean_sh.empty:
+            shape_counts = clean_sh.value_counts().head(7).reset_index()
+            shape_counts.columns = ['Vorm', 'Aantal']
 
-            full_h = pd.DataFrame({'Uur': list(range(24))})
-            hourly_c = pd.merge(full_h, hourly_c, on='Uur', how='left').fillna(0)
-            hourly_c['Aantal'] = hourly_c['Aantal'].astype(int)
+            colors_shape = [COLOR_ACCENT if i == 0 else COLOR_CONTEXT for i in range(len(shape_counts))]
 
-            hourly_c['Tijdsblok'] = hourly_c['Uur'].apply(lambda h: f"{int(h):02d}:00 - {int(h)+1:02d}:00")
-            hourly_c['Uur_label'] = hourly_c['Uur'].apply(lambda h: f"{int(h):02d}:00")
-
-            fig_h = px.bar(
-                hourly_c,
-                x='Uur_label',
-                y='Aantal',
-                color_discrete_sequence=[COLOR_ACCENT],
-                hover_data={'Uur_label': False, 'Tijdsblok': True, 'Aantal': ':,d'}
-            )
-            fig_h.update_layout(
-                xaxis_title="Startuur (bijv. 21:00 = 21:00 - 22:00)",
-                yaxis_title="Aantal meldingen"
-            )
-            st.plotly_chart(fig_h, use_container_width=True)
-
-    with col_b:
-        clean_cities = get_clean_series(filtered_df, city_col)
-        if not clean_cities.empty:
-            st.subheader(f"Top Steden in {selected_country}")
-            city_counts = clean_cities.value_counts().head(8).reset_index()
-            city_counts.columns = ['Stad', 'Aantal']
-            city_counts['Stad'] = city_counts['Stad'].str.title()
-
-            fig_city = px.bar(
-                city_counts, x='Aantal', y='Stad', orientation='h', text='Aantal',
-                color_discrete_sequence=[COLOR_CONTEXT]
-            )
-            max_c_val = city_counts['Aantal'].max()
-            fig_city.update_traces(textposition='outside', cliponaxis=False)
-            fig_city.update_layout(
+            fig_shape = px.bar(shape_counts, x='Aantal', y='Vorm', orientation='h', text='Aantal')
+            max_sh_val = shape_counts['Aantal'].max()
+            fig_shape.update_traces(marker_color=colors_shape, textposition='outside', cliponaxis=False)
+            fig_shape.update_layout(
                 yaxis=dict(autorange="reversed"),
-                xaxis=dict(range=[0, max_c_val * 1.2]),
+                xaxis=dict(range=[0, max_sh_val * 1.2]),
                 margin=dict(l=20, r=30, t=30, b=20)
             )
-            st.plotly_chart(fig_city, use_container_width=True)
+            st.plotly_chart(fig_shape, use_container_width=True)
         else:
-            st.subheader(f"Populaire Vormen in {selected_country}")
-            clean_sh_country = get_clean_series(filtered_df, shape_col)
-            if not clean_sh_country.empty:
-                shape_c = clean_sh_country.value_counts().head(8).reset_index()
-                shape_c.columns = ['Vorm', 'Aantal']
+            st.info("Geen gegevens beschikbaar over vormen voor deze selectie.")
 
-                fig_s = px.bar(
-                    shape_c, x='Aantal', y='Vorm', orientation='h', text='Aantal',
-                    color_discrete_sequence=[COLOR_CONTEXT]
-                )
-                max_s_val = shape_c['Aantal'].max()
-                fig_s.update_traces(textposition='outside', cliponaxis=False)
-                fig_s.update_layout(
-                    yaxis=dict(autorange="reversed"),
-                    xaxis=dict(range=[0, max_s_val * 1.2])
-                )
-                st.plotly_chart(fig_s, use_container_width=True)
-
+    with col_b:
+        st.subheader("Verdeling per Uur")
+        plot_hourly_distribution(filtered_df)
+        
 st.divider()
 
-# Trend over de jaren
-st.subheader("Verloop van UFO Waarnemingen over de Jaren")
-
-if 'datetime_clean' in filtered_df.columns and not filtered_df['datetime_clean'].dropna().empty:
-    df_timeline = filtered_df.dropna(subset=['datetime_clean']).copy()
-    df_timeline['date'] = df_timeline['datetime_clean'].dt.to_period('M').dt.to_timestamp()
-    timeline_counts = df_timeline.groupby('date').size().reset_index(name='Aantal')
-
-    fig_timeline = px.line(
-        timeline_counts,
-        x='date',
-        y='Aantal',
-        labels={'date': 'Datum', 'Aantal': 'Aantal meldingen'}
-    )
-    fig_timeline.update_traces(line_color=COLOR_ACCENT, line_width=2.5)
-
-    fig_timeline.update_xaxes(
-        rangeselector=dict(
-            buttons=[
-                dict(count=5, label="5Y", step="year", stepmode="backward"),
-                dict(count=10, label="10Y", step="year", stepmode="backward"),
-                dict(count=25, label="25Y", step="year", stepmode="backward"),
-                dict(step="all", label="All time")
-            ]
-        )
-    )
-    st.plotly_chart(fig_timeline, use_container_width=True)
-
-st.divider()
-
-# Join verantwoording
-with st.expander("Data Integratie & Join Verantwoording"):
-    st.markdown("**Samenvoegsleutel (Join Key):** `iso3` (UFO dataset) = `countryId` (REST API)")
+with st.expander("Data Integratie Details"):
+    st.markdown("**Samenvoeging:** `iso3` (UFO data) = `countryId` (Bevolkingsdata API)")
     rijen_totaal = len(df)
 
     col_a, col_b = st.columns(2)
-    col_a.metric("Aantal rijen vóór merge", f"{rijen_totaal:,}")
-    col_b.metric("Aantal rijen ná merge", f"{rijen_totaal:,}")
-
-    st.success("De left-join is geslaagd op basis van ISO-3 landcodes. Er is geen dataverlies of onbedoelde verdubbeling opgetreden.")
+    col_a.metric("Aantal rijen voor merge", f"{rijen_totaal:,}")
+    col_b.metric("Aantal rijen na merge", f"{rijen_totaal:,}")
