@@ -36,10 +36,10 @@ def detect_column(dataframe: pd.DataFrame, candidates: list[str]) -> str | None:
     return None
 
 
-def plot_per_100k(dataframe: pd.DataFrame, group_col: str = 'country_name', top_n: int = 8):
-    """Genereert een staafdiagram voor waarnemingen per 100.000 inwoners."""
+def plot_per_10k(dataframe: pd.DataFrame, group_col: str = 'country_name', top_n: int = 8):
+    """Genereert een staafdiagram voor waarnemingen per 10.000 inwoners."""
     if group_col not in dataframe.columns or 'population' not in dataframe.columns:
-        st.info("Onvoldoende bevolkingsdata beschikbaar voor berekening per 100k inwoners.")
+        st.info("Onvoldoende bevolkingsdata beschikbaar voor berekening per 10k inwoners.")
         return
 
     df_valid = dataframe.dropna(subset=[group_col, 'population']).copy()
@@ -57,28 +57,28 @@ def plot_per_100k(dataframe: pd.DataFrame, group_col: str = 'country_name', top_
         st.info("Geen geldige bevolkingscijfers gevonden.")
         return
 
-    stats['Per100k'] = (stats['Aantal'] / stats['Bevolking']) * 100000
-    stats = stats.sort_values(by='Per100k', ascending=False).head(top_n)
+    stats['Per10k'] = (stats['Aantal'] / stats['Bevolking']) * 10000
+    stats = stats.sort_values(by='Per10k', ascending=False).head(top_n)
 
     colors = [COLOR_ACCENT if i == 0 else COLOR_CONTEXT for i in range(len(stats))]
 
     fig = px.bar(
         stats,
-        x='Per100k',
+        x='Per10k',
         y=group_col,
         orientation='h',
-        text='Per100k'
+        text='Per10k'
     )
-    max_val = stats['Per100k'].max()
+    max_val = stats['Per10k'].max()
     fig.update_traces(
         marker_color=colors,
-        texttemplate='%{text:.2f}',
+        texttemplate='%{text:.4f}',  # Aangepast naar 4 decimalen
         textposition='outside',
         cliponaxis=False
     )
     fig.update_layout(
         yaxis=dict(autorange="reversed", title=group_col.replace('_', ' ').capitalize()),
-        xaxis=dict(range=[0, max_val * 1.25], title="Waarnemingen per 100.000 inwoners"),
+        xaxis=dict(range=[0, max_val * 1.25], title="Waarnemingen per 10.000 inwoners"),
         margin=dict(l=20, r=40, t=30, b=20)
     )
     st.plotly_chart(fig, use_container_width=True)
@@ -360,8 +360,8 @@ if is_overview_mode:
             st.plotly_chart(fig_country, use_container_width=True)
 
     with row1_col2:
-        st.subheader("Waarnemingen per 100k Inwoners")
-        plot_per_100k(filtered_df, group_col='country_name', top_n=8)
+        st.subheader("Waarnemingen per 10k Inwoners")
+        plot_per_10k(filtered_df, group_col='country_name', top_n=8)
 
     st.divider()
 
@@ -410,12 +410,12 @@ else:
 
     total_sightings = len(filtered_df)
 
-    per_100k_str = "N.v.t."
+    per_10k_str = "N.v.t."
     if 'population' in filtered_df.columns and not filtered_df['population'].dropna().empty:
         pop = filtered_df['population'].iloc[0]
         if pd.notna(pop) and pop > 0:
-            per_100k_val = (total_sightings / pop) * 100000
-            per_100k_str = f"{per_100k_val:.2f}"
+            per_10k_val = (total_sightings / pop) * 10000
+            per_10k_str = f"{per_10k_val:.4f}"  # Aangepast naar 4 decimalen
 
     top_shape = "Onbekend"
     clean_sh = get_clean_series(filtered_df, shape_col)
@@ -425,7 +425,7 @@ else:
     # 1. KPI's
     k1, k2, k3 = st.columns(3)
     k1.metric("Aantal Waarnemingen", f"{total_sightings:,}")
-    k2.metric("Per 100k Inwoners", per_100k_str)
+    k2.metric("Per 10k Inwoners", per_10k_str)
     k3.metric("Meest Geziene Vorm", top_shape)
 
     st.divider()
