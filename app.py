@@ -557,47 +557,58 @@ if not drugs.empty:
     ufo_per_state = ufo_states_code.value_counts().reset_index()
     ufo_per_state.columns = ["State_code", "UFO_count"]
 
-    # 3. Drugs data opschonen met DataCleaner
-    drugs_cleaner = DataCleaner(drugs)
-    drugs_cleaner.clean_text_columns(columns=["State"], strip=True, lower=True)
+    # 3. Dynamisch de staat- en cijferkolommen zoeken in drugs data
+    drug_state_col = detect_column(drugs, ['state', 'state_name', 'region', 'location'])
 
-    target_rate_col = "Rates.Marijuana.Used Past Year.18-25"
-    if target_rate_col in drugs.columns:
-        drugs_cleaner.convert_numeric(columns=[target_rate_col])
+    if drug_state_col:
+        drugs_cleaner = DataCleaner(drugs)
+        drugs_cleaner.clean_text_columns(columns=[drug_state_col], strip=True)
+        drugs_df = drugs_cleaner.get_df()
 
-    drugs_df = drugs_cleaner.get_df()
-    drugs_df["State_code"] = drugs_df["State"].map(inv_state_map)
-    drugs_df["Marijuana_18_25"] = drugs_df[target_rate_col] if target_rate_col in drugs_df.columns else pd.Series(
-        dtype=float)
+        target_rate_col = detect_column(drugs_df, [
+            "rates.marijuana.used past year.18-25",
+            "marijuana_18_25",
+            "marijuana"
+        ]) or "Rates.Marijuana.Used Past Year.18-25"
 
-    # 4. Data combineren & opschonen
-    data_scatter = pd.merge(
-        drugs_df,
-        ufo_per_state,
-        on="State_code",
-        how="inner"
-    )[["State", "State_code", "Marijuana_18_25", "UFO_count"]].dropna()
+        if target_rate_col in drugs_df.columns:
+            drugs_cleaner.convert_numeric(columns=[target_rate_col])
+            drugs_df["Marijuana_18_25"] = drugs_df[target_rate_col]
+        else:
+            drugs_df["Marijuana_18_25"] = pd.Series(dtype=float)
 
-    data_scatter = data_scatter.drop_duplicates(subset=["State_code"]).head(50)
+        # Mapping van volle staatsnaam naar 2-letterig staatcode
+        drugs_df["State_code"] = drugs_df[drug_state_col].astype(str).str.lower().map(inv_state_map)
 
-    st.write("Aantal gekoppelde staten:", len(data_scatter))
-    st.dataframe(data_scatter)
+        # 4. Data combineren & opschonen
+        data_scatter = pd.merge(
+            drugs_df,
+            ufo_per_state,
+            on="State_code",
+            how="inner"
+        )[["State_code", "Marijuana_18_25", "UFO_count"]].dropna()
+        data_scatter = data_scatter.drop_duplicates(subset=["State_code"]).head(50)
+        st.write("Aantal gekoppelde staten:", len(data_scatter))
+        st.dataframe(data_scatter)
 
-    # 5. Scatterplot & Correlatie
-    if not data_scatter.empty:
-        fig_scatter = px.scatter(
-            data_scatter,
-            x="Marijuana_18_25",
-            y="UFO_count",
-            hover_name="State",
-            labels={
-                "Marijuana_18_25": "Marihuanagebruik 18-25 (%)",
-                "UFO_count": "Aantal UFO-meldingen"
-            },
-            title="Marihuanagebruik vs. UFO-meldingen per staat"
-        )
-        st.plotly_chart(fig_scatter, use_container_width=True)
 
-        correlation = data_scatter["Marijuana_18_25"].corr(data_scatter["UFO_count"])
-        st.metric("Pearson correlatie", f"{correlation:.2f}")
+        # 5. Scatterplot & Correlatie
+        if not data_scatter.empty:
+            fig_scatter = px.scatter(
+                data_scatter,
+                x="Marijuana_18_25",
+                y="UFO_count",
+                hover_name="State_code",
+                labels={
+                    "Marijuana_18_25": "Marihuanagebruik 18-25 (%)",
+                    "UFO_count": "Aantal UFO-meldingen"
+                },
+                title="Marihuanagebruik vs. UFO-meldingen per staat"
+            )
+            st.plotly_chart(fig_scatter, use_container_width=True)
+
+            correlation = data_scatter["Marijuana_18_25"].corr(data_scatter["UFO_count"])
+            st.metric("Pearson correlatie", f"{correlation:.2f}")
+    else:
+        st.warning("Geen geldige 'state'-kolom gevonden in the drugs dataset.")
 
