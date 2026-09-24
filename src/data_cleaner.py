@@ -59,10 +59,12 @@ class DataCleaner:
             if col not in self.df.columns:
                 continue
 
-            self.df[col] = self.df[col].astype(str)
-
             if replace_html:
-                self.df[col] = self.df[col].map(lambda value: unescape(value))
+                self.df[col] = self.df[col].map(
+                    lambda value: unescape(value) if isinstance(value, str) else value
+                )
+
+            self.df[col] = self.df[col].astype(str)
 
             if strip:
                 self.df[col] = self.df[col].str.strip()
@@ -134,7 +136,23 @@ class DataCleaner:
 
 
 
-class Ufo_data_cleaner(DataCleaner):
-    def __init__(self, df: pd.DataFrame):
-        self.df = df
+
+
+
+cleaner = DataCleaner.from_csv("../data/ufo_sighting_data.csv", low_memory=False)
+
+df = cleaner.clean(
+    text_columns=["city", "state/province", "country", "description"],
+    numeric_columns=["length_of_encounter_seconds", "latitude", "longitude"],
+    datetime_columns=["date_time", "date_documented"],
+    lower_text=False
+)
+
+print(df.head())
+print(df.shape)
+print(df.info())
+print(df["country"].unique())
+print(df["country"].value_counts())
+
+
 

@@ -37,9 +37,27 @@ loader = kaggleDataLoader("camnugent/ufo-sightings-around-the-world")
 df = loader.load_csv("ufo_sighting_data.csv")
 
 
+print(df.head())
+print(df.shape)
+print(df.info())
+print(df["country"].unique())
+print(df["country"].value_counts())
+print(df["country"].isna().sum())
+print(df["country"].isna().mean() * 100)
+print(df["country"].value_counts(dropna=False))
 
 
+rows_state_yes_country_missing = df[
+    df["state/province"].notna() &
+    (df["state/province"].astype(str).str.strip() != "") &
+    (
+        df["country"].isna() |
+        (df["country"].astype(str).str.strip() == "")
+    )
+]
+print(len(rows_state_yes_country_missing))
 
+print(df["state/province"].value_counts())
 
 
 
