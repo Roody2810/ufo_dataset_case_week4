@@ -2,6 +2,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from src.data_cleaner import DataCleaner
 from src.data_loader import load_combined_data
 from src.constants import (
     COLOR_ACCENT,
@@ -21,11 +22,16 @@ st.set_page_config(
 
 
 def get_clean_series(dataframe: pd.DataFrame, col_name: str | None) -> pd.Series:
-    """Filtert lege en ongeldige waarden uit een specifieke kolom."""
+    """Filtert lege en ongeldige waarden uit een specifieke kolom met behulp van DataCleaner."""
     if not col_name or col_name not in dataframe.columns:
         return pd.Series(dtype=object)
-    s = dataframe[col_name].dropna().astype(str).str.strip()
-    return s[~s.str.lower().isin(INVALID_VALUES)]
+
+    cleaner = DataCleaner(dataframe[[col_name]])
+    cleaner.standardize_empty_values()
+    cleaner.clean_text_columns(strip=True, replace_html=True)
+
+    s = cleaner.get_df()[col_name].dropna()
+    return s[~s.astype(str).str.lower().isin(INVALID_VALUES)]
 
 
 def detect_column(dataframe: pd.DataFrame, candidates: list[str]) -> str | None:
@@ -36,10 +42,10 @@ def detect_column(dataframe: pd.DataFrame, candidates: list[str]) -> str | None:
     return None
 
 
-def plot_per_10k(dataframe: pd.DataFrame, group_col: str = 'country_name', top_n: int = 8):
-    """Genereert een staafdiagram voor waarnemingen per 10.000 inwoners."""
+def plot_per_100k(dataframe: pd.DataFrame, group_col: str = 'country_name', top_n: int = 8):
+    """Genereert een staafdiagram voor waarnemingen per 100.000 inwoners."""
     if group_col not in dataframe.columns or 'population' not in dataframe.columns:
-        st.info("Onvoldoende bevolkingsdata beschikbaar voor berekening per 10k inwoners.")
+        st.info("Onvoldoende bevolkingsdata beschikbaar voor berekening per 100k inwoners.")
         return
 
     df_valid = dataframe.dropna(subset=[group_col, 'population']).copy()
@@ -57,28 +63,28 @@ def plot_per_10k(dataframe: pd.DataFrame, group_col: str = 'country_name', top_n
         st.info("Geen geldige bevolkingscijfers gevonden.")
         return
 
-    stats['Per10k'] = (stats['Aantal'] / stats['Bevolking']) * 10000
-    stats = stats.sort_values(by='Per10k', ascending=False).head(top_n)
+    stats['Per100k'] = (stats['Aantal'] / stats['Bevolking']) * 100000
+    stats = stats.sort_values(by='Per100k', ascending=False).head(top_n)
 
     colors = [COLOR_ACCENT if i == 0 else COLOR_CONTEXT for i in range(len(stats))]
 
     fig = px.bar(
         stats,
-        x='Per10k',
+        x='Per100k',
         y=group_col,
         orientation='h',
-        text='Per10k'
+        text='Per100k'
     )
-    max_val = stats['Per10k'].max()
+    max_val = stats['Per100k'].max()
     fig.update_traces(
         marker_color=colors,
-        texttemplate='%{text:.4f}',  # Aangepast naar 4 decimalen
+        texttemplate='%{text:.2f}',
         textposition='outside',
         cliponaxis=False
     )
     fig.update_layout(
         yaxis=dict(autorange="reversed", title=group_col.replace('_', ' ').capitalize()),
-        xaxis=dict(range=[0, max_val * 1.25], title="Waarnemingen per 10.000 inwoners"),
+        xaxis=dict(range=[0, max_val * 1.25], title="Waarnemingen per 100.000 inwoners"),
         margin=dict(l=20, r=40, t=30, b=20)
     )
     st.plotly_chart(fig, use_container_width=True)
@@ -97,14 +103,14 @@ def plot_hourly_distribution(dataframe: pd.DataFrame):
     hourly_counts = pd.merge(full_hours, hourly_counts, on='Uur', how='left').fillna(0)
     hourly_counts['Aantal'] = hourly_counts['Aantal'].astype(int)
 
-    hourly_counts['Tijdsblok'] = hourly_counts['Uur'].apply(lambda h: f"{int(h):02d}:00 - {int(h)+1:02d}:00")
+    hourly_counts['Tijdsblok'] = hourly_counts['Uur'].apply(lambda h: f"{int(h):02d}:00 - {int(h) + 1:02d}:00")
     hourly_counts['Uur_label'] = hourly_counts['Uur'].apply(lambda h: f"{int(h):02d}:00")
 
     max_count = hourly_counts['Aantal'].max()
     threshold = max_count * 0.80 if max_count > 0 else 0
-    
+
     colors_hour = [
-        COLOR_ACCENT if val >= threshold and val > 0 else COLOR_CONTEXT 
+        COLOR_ACCENT if val >= threshold and val > 0 else COLOR_CONTEXT
         for val in hourly_counts['Aantal']
     ]
 
@@ -158,8 +164,8 @@ def plot_timeline(dataframe: pd.DataFrame, key_suffix: str = "default"):
     default_cumulative = total_records < 100
 
     is_cumulative = st.checkbox(
-        "Toon cumulatief verloop", 
-        value=default_cumulative, 
+        "Toon cumulatief verloop",
+        value=default_cumulative,
         key=f"cum_check_{key_suffix}"
     )
 
@@ -185,7 +191,7 @@ def plot_timeline(dataframe: pd.DataFrame, key_suffix: str = "default"):
         labels={'date': x_title, 'Aantal': y_title}
     )
     fig_timeline.update_traces(line_color=COLOR_ACCENT, line_width=2.5)
-    
+
     max_y = timeline_counts['Aantal'].max()
     fig_timeline.update_layout(
         yaxis=dict(tick0=0, dtick=1 if max_y <= 10 else None, title=y_title),
@@ -203,7 +209,7 @@ def plot_timeline(dataframe: pd.DataFrame, key_suffix: str = "default"):
                 ]
             )
         )
-        
+
     st.plotly_chart(fig_timeline, use_container_width=True)
 
 
@@ -221,15 +227,28 @@ if df.empty:
     st.error("De dataset kon niet worden geladen.")
     st.stop()
 
-# Datetime verwerken
-datetime_col = detect_column(df, ['date_time', 'datetime', 'date'])
+# Datacleaning via DataCleaner class
+cleaner = DataCleaner(df)
+cleaner.standardize_empty_values()
+cleaner.clean_text_columns(replace_html=True, strip=True)
+
+if 'population' in cleaner.get_df().columns:
+    cleaner.convert_numeric(columns=['population'])
+
+cleaner.drop_duplicates()
+
+# Datetime opschonen en verwerken
+datetime_col = detect_column(cleaner.get_df(), ['date_time', 'datetime', 'date'])
 if datetime_col:
-    df['datetime_clean'] = pd.to_datetime(
-        df[datetime_col].astype(str).str.replace('24:00', '00:00'),
-        errors='coerce'
-    )
+    cleaner.df[datetime_col] = cleaner.df[datetime_col].astype(str).str.replace('24:00', '00:00')
+    cleaner.convert_datetime(columns=[datetime_col])
+
+    df = cleaner.get_df()
+    df['datetime_clean'] = df[datetime_col]
     df['hour'] = df['datetime_clean'].dt.hour
     df['year'] = df['datetime_clean'].dt.year
+else:
+    df = cleaner.get_df()
 
 # Kolommen detecteren en staatnamen vroegtijdig mappen
 state_col = detect_column(df, ['state', 'state/province', 'state_code', 'region', 'staat', 'province'])
@@ -258,10 +277,10 @@ is_usa_selected = selected_country.lower() in USA_NAMES
 if is_usa_selected and state_col:
     usa_df = df[df['country_name'] == selected_country]
     clean_states_series = get_clean_series(usa_df, state_col)
-    
+
     us_allowed_names = {STATE_MAP[code] for code in US_STATES if code in STATE_MAP} | US_STATES
     available_states = sorted([s for s in clean_states_series.unique() if s in us_allowed_names])
-    
+
     selected_state = st.sidebar.selectbox(
         "Selecteer Amerikaanse staat:",
         options=["Alle staten"] + available_states
@@ -296,7 +315,7 @@ if 'hour' in filtered_df.columns:
         filtered_df = filtered_df[
             (filtered_df['hour'].isna()) |
             ((filtered_df['hour'] >= min_h) & (filtered_df['hour'] <= actual_max_h))
-        ]
+            ]
 
 if show_only_populated and 'population' in filtered_df.columns:
     filtered_df = filtered_df[filtered_df['population'].notna()]
@@ -318,7 +337,7 @@ if is_overview_mode:
     peak_hour_str = "N.v.t."
     if 'hour' in filtered_df.columns and not filtered_df['hour'].dropna().empty:
         peak_hour = int(filtered_df['hour'].mode()[0])
-        peak_hour_str = f"{peak_hour:02d}:00u - {peak_hour+1:02d}:00u"
+        peak_hour_str = f"{peak_hour:02d}:00u - {peak_hour + 1:02d}:00u"
 
     top_state_str = "Onbekend"
     clean_states = get_clean_series(filtered_df, state_col)
@@ -360,8 +379,8 @@ if is_overview_mode:
             st.plotly_chart(fig_country, use_container_width=True)
 
     with row1_col2:
-        st.subheader("Waarnemingen per 10k Inwoners")
-        plot_per_10k(filtered_df, group_col='country_name', top_n=8)
+        st.subheader("Waarnemingen per 100k Inwoners")
+        plot_per_100k(filtered_df, group_col='country_name', top_n=8)
 
     st.divider()
 
@@ -410,12 +429,12 @@ else:
 
     total_sightings = len(filtered_df)
 
-    per_10k_str = "N.v.t."
+    per_100k_str = "N.v.t."
     if 'population' in filtered_df.columns and not filtered_df['population'].dropna().empty:
         pop = filtered_df['population'].iloc[0]
         if pd.notna(pop) and pop > 0:
-            per_10k_val = (total_sightings / pop) * 10000
-            per_10k_str = f"{per_10k_val:.4f}"  # Aangepast naar 4 decimalen
+            per_100k_val = (total_sightings / pop) * 100000
+            per_100k_str = f"{per_100k_val:.2f}"
 
     top_shape = "Onbekend"
     clean_sh = get_clean_series(filtered_df, shape_col)
@@ -425,7 +444,7 @@ else:
     # 1. KPI's
     k1, k2, k3 = st.columns(3)
     k1.metric("Aantal Waarnemingen", f"{total_sightings:,}")
-    k2.metric("Per 10k Inwoners", per_10k_str)
+    k2.metric("Per 100k Inwoners", per_100k_str)
     k3.metric("Meest Geziene Vorm", top_shape)
 
     st.divider()
@@ -468,7 +487,7 @@ else:
     with col_b:
         st.subheader("Verdeling per Uur")
         plot_hourly_distribution(filtered_df)
-        
+
 st.divider()
 
 with st.expander("Data Integratie Details"):

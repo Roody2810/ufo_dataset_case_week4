@@ -135,24 +135,3 @@ class DataCleaner:
         return self.df
 
 
-
-
-
-
-cleaner = DataCleaner.from_csv("../data/ufo_sighting_data.csv", low_memory=False)
-
-df = cleaner.clean(
-    text_columns=["city", "state/province", "country", "description"],
-    numeric_columns=["length_of_encounter_seconds", "latitude", "longitude"],
-    datetime_columns=["date_time", "date_documented"],
-    lower_text=False
-)
-
-print(df.head())
-print(df.shape)
-print(df.info())
-print(df["country"].unique())
-print(df["country"].value_counts())
-
-
-
