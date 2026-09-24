@@ -3,7 +3,7 @@ import plotly.express as px
 import streamlit as st
 
 from src.data_cleaner import DataCleaner
-from src.data_loader import load_combined_data
+from src.data_loader import load_combined_data, KaggleDataLoader
 from src.constants import (
     COLOR_ACCENT,
     COLOR_CONTEXT,
@@ -15,7 +15,7 @@ from src.constants import (
 
 # Pagina configuratie
 st.set_page_config(
-    page_title="UFO Spotter Dashboard",
+    page_title="UFO Spotter Dashboard & Bevolkingsanalyse",
     page_icon="🛸",
     layout="wide"
 )
@@ -232,8 +232,10 @@ cleaner = DataCleaner(df)
 cleaner.standardize_empty_values()
 cleaner.clean_text_columns(replace_html=True, strip=True)
 
-if 'population' in cleaner.get_df().columns:
-    cleaner.convert_numeric(columns=['population'])
+# Coerce numerieke velden (inclusief duur voor latere filtering)
+num_cols = [c for c in ['population', 'length_of_encounter_seconds'] if c in cleaner.get_df().columns]
+if num_cols:
+    cleaner.convert_numeric(columns=num_cols)
 
 cleaner.drop_duplicates()
 
@@ -250,8 +252,9 @@ if datetime_col:
 else:
     df = cleaner.get_df()
 
-# Kolommen detecteren en staatnamen vroegtijdig mappen
+# Kolommen detecteren
 state_col = detect_column(df, ['state', 'state/province', 'state_code', 'region', 'staat', 'province'])
+city_col = detect_column(df, ['city', 'stad', 'town', 'location'])
 shape_col = detect_column(df, ['shape', 'ufo_shape', 'vorm'])
 
 if state_col:
@@ -461,7 +464,7 @@ else:
 
     st.divider()
 
-    # 4a/4b. Vormen & Uurverdeling
+    # 4a/4b. Vormen & Uurverdeling / Top Steden
     col_a, col_b = st.columns(2)
 
     with col_a:
@@ -485,8 +488,28 @@ else:
             st.info("Geen gegevens beschikbaar over vormen voor deze selectie.")
 
     with col_b:
-        st.subheader("Verdeling per Uur")
-        plot_hourly_distribution(filtered_df)
+        clean_cities = get_clean_series(filtered_df, city_col)
+        if not clean_cities.empty:
+            st.subheader(f"Top Steden in {selected_country}")
+            city_counts = clean_cities.value_counts().head(8).reset_index()
+            city_counts.columns = ['Stad', 'Aantal']
+            city_counts['Stad'] = city_counts['Stad'].str.title()
+
+            fig_city = px.bar(
+                city_counts, x='Aantal', y='Stad', orientation='h', text='Aantal',
+                color_discrete_sequence=[COLOR_CONTEXT]
+            )
+            max_c_val = city_counts['Aantal'].max()
+            fig_city.update_traces(textposition='outside', cliponaxis=False)
+            fig_city.update_layout(
+                yaxis=dict(autorange="reversed"),
+                xaxis=dict(range=[0, max_c_val * 1.2]),
+                margin=dict(l=20, r=30, t=30, b=20)
+            )
+            st.plotly_chart(fig_city, use_container_width=True)
+        else:
+            st.subheader("Verdeling per Uur")
+            plot_hourly_distribution(filtered_df)
 
 st.divider()
 
@@ -497,3 +520,78 @@ with st.expander("Data Integratie Details"):
     col_a, col_b = st.columns(2)
     col_a.metric("Aantal rijen voor merge", f"{rijen_totaal:,}")
     col_b.metric("Aantal rijen na merge", f"{rijen_totaal:,}")
+
+# ============================================================
+# MARIHUANAGEBRUIK VS UFO-MELDINGEN
+# ============================================================
+
+st.divider()
+st.header("Marihuanagebruik vs. UFO-meldingen")
+
+# 1. Drugs dataset laden
+try:
+    drug_loader = KaggleDataLoader(
+        "mexwell/us-drug-abuse",
+        download_dir="../data"
+    )
+    drugs = drug_loader.load_csv("drugs.csv")
+except Exception as e:
+    st.warning(f"Kon drugs.csv niet laden: {e}")
+    drugs = pd.DataFrame()
+
+if not drugs.empty:
+    # Omgekeerde mapping van STATE_MAP (Full Name -> Code)
+    inv_state_map = {v.lower(): k for k, v in STATE_MAP.items()} if STATE_MAP else {}
+
+    # 2. UFO's per staat tellen
+    raw_state_col = detect_column(df, ['state', 'state/province', 'state_code', 'state_full']) or 'state'
+    ufo_states = df[raw_state_col].dropna().astype(str).str.strip()
+    ufo_states_code = ufo_states.map(lambda x: inv_state_map.get(x.lower(), x)).str.upper()
+
+    ufo_per_state = ufo_states_code.value_counts().reset_index()
+    ufo_per_state.columns = ["State_code", "UFO_count"]
+
+    # 3. Drugs data opschonen met DataCleaner
+    drugs_cleaner = DataCleaner(drugs)
+    drugs_cleaner.clean_text_columns(columns=["State"], strip=True, lower=True)
+
+    target_rate_col = "Rates.Marijuana.Used Past Year.18-25"
+    if target_rate_col in drugs.columns:
+        drugs_cleaner.convert_numeric(columns=[target_rate_col])
+
+    drugs_df = drugs_cleaner.get_df()
+    drugs_df["State_code"] = drugs_df["State"].map(inv_state_map)
+    drugs_df["Marijuana_18_25"] = drugs_df[target_rate_col] if target_rate_col in drugs_df.columns else pd.Series(
+        dtype=float)
+
+    # 4. Data combineren & opschonen
+    data_scatter = pd.merge(
+        drugs_df,
+        ufo_per_state,
+        on="State_code",
+        how="inner"
+    )[["State", "State_code", "Marijuana_18_25", "UFO_count"]].dropna()
+
+    data_scatter = data_scatter.drop_duplicates(subset=["State_code"]).head(50)
+
+    st.write("Aantal gekoppelde staten:", len(data_scatter))
+    st.dataframe(data_scatter)
+
+    # 5. Scatterplot & Correlatie
+    if not data_scatter.empty:
+        fig_scatter = px.scatter(
+            data_scatter,
+            x="Marijuana_18_25",
+            y="UFO_count",
+            hover_name="State",
+            labels={
+                "Marijuana_18_25": "Marihuanagebruik 18-25 (%)",
+                "UFO_count": "Aantal UFO-meldingen"
+            },
+            title="Marihuanagebruik vs. UFO-meldingen per staat"
+        )
+        st.plotly_chart(fig_scatter, use_container_width=True)
+
+        correlation = data_scatter["Marijuana_18_25"].corr(data_scatter["UFO_count"])
+        st.metric("Pearson correlatie", f"{correlation:.2f}")
+
