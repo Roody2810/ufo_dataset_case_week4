@@ -1,6 +1,7 @@
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+import os
 
 from src.data_cleaner import DataCleaner
 from src.data_loader import load_combined_data, KaggleDataLoader
@@ -12,6 +13,11 @@ from src.constants import (
     STATE_MAP,
     US_STATES
 )
+
+if "KAGGLE_USERNAME" in st.secrets:
+    os.environ["KAGGLE_USERNAME"] = st.secrets["KAGGLE_USERNAME"]
+if "KAGGLE_KEY" in st.secrets:
+    os.environ["KAGGLE_KEY"] = st.secrets["KAGGLE_KEY"]
 
 # Pagina configuratie
 st.set_page_config(
